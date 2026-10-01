@@ -605,6 +605,18 @@ export class ChannelStartupService {
       participants?: string;
     };
 
+    // WhatsApp Multi-Device can store incoming messages under a Linked
+    // Identity JID while also providing the real phone JID in remoteJidAlt.
+    // The manager opens personal chats by phone JID, so match either field.
+    const remoteJidFilter = keyFilters?.remoteJid
+      ? {
+          OR: [
+            { key: { path: ['remoteJid'], equals: keyFilters.remoteJid } },
+            { key: { path: ['remoteJidAlt'], equals: keyFilters.remoteJid } },
+          ],
+        }
+      : {};
+
     const timestampFilter = {};
     if (query?.where?.messageTimestamp) {
       if (query.where.messageTimestamp['gte'] && query.where.messageTimestamp['lte']) {
@@ -625,7 +637,7 @@ export class ChannelStartupService {
         AND: [
           keyFilters?.id ? { key: { path: ['id'], equals: keyFilters?.id } } : {},
           keyFilters?.fromMe ? { key: { path: ['fromMe'], equals: keyFilters?.fromMe } } : {},
-          keyFilters?.remoteJid ? { key: { path: ['remoteJid'], equals: keyFilters?.remoteJid } } : {},
+          remoteJidFilter,
           keyFilters?.participants ? { key: { path: ['participants'], equals: keyFilters?.participants } } : {},
         ],
       },
@@ -649,7 +661,7 @@ export class ChannelStartupService {
         AND: [
           keyFilters?.id ? { key: { path: ['id'], equals: keyFilters?.id } } : {},
           keyFilters?.fromMe ? { key: { path: ['fromMe'], equals: keyFilters?.fromMe } } : {},
-          keyFilters?.remoteJid ? { key: { path: ['remoteJid'], equals: keyFilters?.remoteJid } } : {},
+          remoteJidFilter,
           keyFilters?.participants ? { key: { path: ['participants'], equals: keyFilters?.participants } } : {},
         ],
       },
@@ -842,10 +854,11 @@ export class ChannelStartupService {
             }
           : undefined;
 
-        let finalRemoteJid = contact.remoteJid;
-        if (finalRemoteJid && finalRemoteJid.endsWith('@lid')) {
-          finalRemoteJid = finalRemoteJid.replace('@lid', '@s.whatsapp.net');
-        }
+        const remoteJidAlt = lastMessage?.key?.remoteJidAlt;
+        const finalRemoteJid =
+          contact.remoteJid?.endsWith('@lid') && remoteJidAlt?.endsWith('@s.whatsapp.net')
+            ? remoteJidAlt
+            : contact.remoteJid;
 
         return {
           id: contact.contactId || null,
@@ -862,7 +875,25 @@ export class ChannelStartupService {
         };
       });
 
-      return mappedResults;
+      // Incoming (@lid + remoteJidAlt) and outgoing (@s.whatsapp.net)
+      // records can describe the same conversation. Keep only the newest
+      // normalized conversation so the manager does not render duplicates.
+      const uniqueResults = new Map<string, (typeof mappedResults)[number]>();
+      for (const result of mappedResults) {
+        const existing = uniqueResults.get(result.remoteJid);
+        const resultUpdatedAt = result.updatedAt ? new Date(result.updatedAt).getTime() : 0;
+        const existingUpdatedAt = existing?.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+
+        if (!existing || resultUpdatedAt >= existingUpdatedAt) {
+          uniqueResults.set(result.remoteJid, result);
+        }
+      }
+
+      return Array.from(uniqueResults.values()).sort((first, second) => {
+        const firstUpdatedAt = first.updatedAt ? new Date(first.updatedAt).getTime() : 0;
+        const secondUpdatedAt = second.updatedAt ? new Date(second.updatedAt).getTime() : 0;
+        return secondUpdatedAt - firstUpdatedAt;
+      });
     }
 
     return [];

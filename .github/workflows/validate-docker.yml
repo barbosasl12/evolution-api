@@ -1,0 +1,20 @@
+name: Validate Docker image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix-lid-manager
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build --tag evolution-api:fix-lid-manager .
